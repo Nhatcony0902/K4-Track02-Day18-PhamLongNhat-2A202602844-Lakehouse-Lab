@@ -132,3 +132,16 @@ for k, v in checks.items():
     print(f"  [{'PASS' if v else 'FAIL'}] {k}")
 assert all(checks.values()), "NB3 incomplete — see FAIL rows above"
 print("\nNB3 complete.")
+
+# %% [markdown]
+# ## 📝 Phân tích kết quả (NB3)
+#
+# - **MERGE 100K dòng:** metrics trong `history()` ghi `num_target_rows_updated=50000`,
+#   `num_target_rows_inserted=50000`, `num_output_rows=150000` — đúng thiết kế (50K key trùng → update, 50K mới
+#   → insert), chạy dưới 1 giây trên đường lightweight.
+# - **Time travel:** `version=0` vẫn đọc được 100,000 dòng; `version=1` có schema thêm `tier`. Đọc version cũ
+#   chỉ là đọc lại tập file mà log ở version đó tham chiếu.
+# - **RESTORE:** v3 chèn 50 dòng `score=-1`. `restore(2)` tạo **commit mới v4 (RESTORE)** thay vì xóa lịch sử,
+#   nên `history()` có **5 version** (WRITE, WRITE, MERGE, WRITE, RESTORE) và số dòng `score < 0` = **0**.
+# - **Ý nghĩa:** rollback là một transaction có audit trail — vẫn biết dữ liệu lỗi vào ở v3 và được gỡ ở v4.
+#   Chừng nào chưa VACUUM, file chứa dữ liệu lỗi vẫn nằm trên đĩa (xem NB6, NB8).

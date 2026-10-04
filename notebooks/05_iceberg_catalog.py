@@ -299,3 +299,20 @@ for k, v in checks.items():
     print(f"  [{'PASS' if v else 'FAIL'}] {k}")
 assert all(checks.values()), "NB5 incomplete — see FAIL rows above"
 print("\nNB5 complete.")
+
+# %% [markdown]
+# ## 📝 Phân tích kết quả (NB5)
+#
+# - **Tạo qua catalog:** `SqlCatalog` (SQLite) tạo `lake.llm_events`; mình không chọn đường dẫn — catalog giữ
+#   con trỏ tới `metadata.json` hiện tại. Partition spec là `1000: ts_day: day(2)` — `ts_day` là transform suy ra
+#   từ field id 2 (`ts`), không phải cột người dùng insert.
+# - **Hidden partition pruning = 10×** (≥ 5×): `plan_files()` không filter → 10 file; lọc trên **`ts`** một ngày
+#   → 1 file, 500 dòng. Iceberg áp `day()` lên predicate của `ts` để suy ra partition; người dùng Hive quên
+#   `WHERE dt=...` sẽ đọc cả 10 file (~$220/ngày ở 10K query với giả định 512 MB/file, $5/TB).
+# - **3 tầng metadata:** metadata.json → 10 manifest list (1/snapshot) → 10 manifest → 10 data file.
+#   Metadata ~138 KB vs data 47.3 KB (**~291%**) — vô lý ở quy mô 500 dòng/file, ~0.1% ở 512 MB/file:
+#   small files phạt hai lần (nhiều file data *và* nhiều metadata phải plan).
+# - **Schema evolution theo field ID:** `latency_ms → latency_millis` giữ **field_id = 4**; đổi tên chỉ là thay đổi
+#   metadata, không rewrite file. Cột mới `tier` có id 6, 5,000 dòng cũ đọc ra NULL.
+# - **Partition evolution:** sau khi đổi spec, data file thuộc **spec 1 và 2** cùng tồn tại; 5,500 dòng đọc được
+#   qua cả hai layout mà không rewrite.

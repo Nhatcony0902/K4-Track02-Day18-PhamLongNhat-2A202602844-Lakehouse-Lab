@@ -155,3 +155,46 @@ assert n_dates >= 7, (
 # - [ ] Silver has fewer rows than Bronze (dedup worked)
 # - [ ] Gold spans ≥ 7 dates × 3 models (slide §8 medallion contract)
 # - [ ] Cost & error_rate columns populated and non-zero
+
+# %%
+# Explicit Gold-quality gate: the cells above only assert Silver < Bronze and
+# ≥ 7 dates, so check every rubric requirement for Gold here.
+gold_q = gold_df.with_columns(pl.col("error_rate").cast(pl.Float64))
+per_model_dates = gold_q.group_by("model").agg(pl.col("date").n_unique().alias("n_dates"))
+layers = {name: Path(p, "_delta_log").exists() for name, p in
+          [("bronze", BRONZE), ("silver", SILVER), ("gold", GOLD)]}
+checks = {
+    "bronze/silver/gold all on disk":     all(layers.values()),
+    "silver < bronze (dedup)":            silver_n < bronze_n,
+    "3 models in Gold":                   n_models == 3,
+    "every model has ≥ 7 dates":          per_model_dates["n_dates"].min() >= 7,
+    "p50 ≤ p95 on every row":             (gold_q["p50_latency_ms"] <= gold_q["p95_latency_ms"]).all(),
+    "cost_usd > 0 on every row":          (gold_q["cost_usd"] > 0).all(),
+    "error_rate in [0, 1] on every row":  gold_q["error_rate"].is_between(0, 1).all(),
+    "no null metrics":                    gold_q.null_count().sum_horizontal()[0] == 0,
+}
+for k, v in checks.items():
+    print(f"  [{'PASS' if v else 'FAIL'}] {k}")
+print("\nRows per date (first/last date are partial if the session timezone is not UTC):")
+print(con.sql("""SELECT date, count(*) AS silver_rows FROM silver
+                 GROUP BY 1 ORDER BY 1""").fetchall())
+session_tz = con.sql("SELECT current_setting('TimeZone')").fetchone()[0]
+print(f"DuckDB session TimeZone: {session_tz}")
+assert all(checks.values()), "NB4 Gold incomplete — see FAIL rows above"
+print("\nNB4 complete.")
+
+# %% [markdown]
+# ## 📝 Phân tích kết quả (NB4)
+#
+# - **3 tầng trên storage:** `_lakehouse/bronze/llm_calls_raw`, `_lakehouse/silver/llm_calls`,
+#   `_lakehouse/gold/llm_daily_metrics` đều là bảng Delta có `_delta_log/` (check `bronze/silver/gold all on disk`).
+# - **Silver < Bronze:** 200,000 → **190,052** dòng; dedup theo `request_id` (giữ bản ghi sớm nhất bằng
+#   `ROW_NUMBER()`) loại **9,948** bản retry trùng — khớp đúng số duplicate mà generator đã seed.
+# - **Gold:** 24 dòng = **8 ngày × 3 model**, mỗi model có ≥ 7 ngày. Cell kiểm tra mới assert thêm
+#   `p50 ≤ p95`, `cost_usd > 0`, `error_rate ∈ [0, 1]` và không null — notebook gốc chưa assert các điều này.
+#   Đọc số: haiku p50 ≈ 560 ms, sonnet ≈ 1.38 s, opus ≈ 3.0 s; p95 ≈ 2× p50; error_rate ≈ 5% đồng đều;
+#   sonnet tốn nhiều tiền nhất mỗi ngày vì volume token lớn nhất, dù đơn giá thấp hơn opus (giá minh họa).
+# - **Vì sao 8 ngày mà không phải 7?** Generator sinh 7 ngày UTC, nhưng `CAST(ts AS DATE)` trong DuckDB dùng
+#   TimeZone của session (`Asia/Bangkok`, UTC+7). Ngày 04-01 chỉ có 19,271 dòng và 04-08 có 7,915 dòng —
+#   hai ngày "một phần". Bài học: phân vùng theo ngày phải cố định timezone (ví dụ `SET TimeZone='UTC'`),
+#   nếu không cùng một code chạy trên hai máy sẽ ra Gold khác nhau.

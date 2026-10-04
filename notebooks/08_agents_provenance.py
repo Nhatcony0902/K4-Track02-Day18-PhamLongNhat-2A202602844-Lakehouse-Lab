@@ -479,3 +479,22 @@ for k, v in checks.items():
     print(f"  [{'PASS' if v else 'FAIL'}] {k}")
 assert all(checks.values()), "NB8 incomplete — see FAIL rows above"
 print("\nNB8 complete.")
+
+# %% [markdown]
+# ## 📝 Phân tích kết quả (NB8)
+#
+# - **Trajectory medallion:** Bronze 1,578 step → Silver partition theo `agent_version`
+#   (`policy-v2`, `policy-v3`); Gold có cả hai policy (150 trajectory mỗi bên, success 0.76 vs 0.753, chi phí gần
+#   bằng nhau) → chưa có bằng chứng v3 tốt hơn v2.
+# - **Pin version:** training run ghi `table_version = 0`, `n_steps_seen = 1578`. Sau khi có thêm rollout (v1:
+#   1,978 step), replay tại v0 vẫn ra **1,578** → khớp. Giới hạn: chỉ so số bước, chưa so nội dung từng dòng.
+# - **Lớp MCP mô phỏng (offline):** 5 lượt `list_tables` chỉ tốn **1** lần đọc catalog (cache theo session,
+#   TTL 60s); `delete_rows` chưa xác nhận trả `input_required`, có xác nhận → `ok`; task `submit_scan` poll
+#   `working → completed` (300 dòng). Đây không phải MCP server thật, và cờ `confirmed` do bên gọi tự truyền nên
+#   không phải ranh giới phân quyền.
+# - **Provenance:** 4 bucket minh họa (`licensed` 675, `public_domain` 333, `synthetic` 331,
+#   `scraped_optout_checked` 327) + `UNCLASSIFIED` 334 đều là partition riêng; tập train của lab chỉ lấy
+#   **1,666/2,000** dòng, loại 334 dòng `license=unknown`. Mapping có hạn chế: CC-BY-4.0 bị xếp vào
+#   `public_domain` dù giấy phép yêu cầu ghi công — không dùng để kết luận pháp lý.
+# - **Erasure:** `user_007` có 8 dòng → 0 ở version hiện tại (v0 → v1), nhưng **v0 vẫn chứa dữ liệu đã xóa**
+#   cho tới khi VACUUM sau retention; các bản sao/derived artifact (vector index, model đã train) phải xử lý riêng.

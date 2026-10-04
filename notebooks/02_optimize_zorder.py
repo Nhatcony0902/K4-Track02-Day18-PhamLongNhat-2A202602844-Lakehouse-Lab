@@ -176,3 +176,19 @@ print(f"\n  (speedup={speedup:.1f}x, pruning={pruned_ratio:.1f}x — the slide a
 print("   wall-clock is noisy on a laptop, which is why file-pruning is the fallback.)")
 assert all(checks.values()), "NB2 incomplete — see FAIL rows above"
 print("\nNB2 complete.")
+
+# %% [markdown]
+# ## 📝 Phân tích kết quả (NB2)
+#
+# - **Small-file problem:** 200 lần append × 5K dòng → **200 file** (≥ 100 theo rubric). Truy vấn điểm
+#   `user_id=4242 AND kind='purchase'` phải mở gần như mọi file vì `user_id` ngẫu nhiên → mỗi file có
+#   min/max ≈ [1, 100000], stats không loại được file nào.
+# - **Sau `compact()` + `z_order(["user_id"])` với target 256 KB:** 200 → **55 file**. Cố tình giữ nhiều file:
+#   nếu gộp hết thành 1 file thì không còn gì để skip.
+# - **Files-pruned ratio = 55×** (≥ 10×): bảng min/max cho thấy các dải `user_id` gần như không chồng lấn
+#   (~1.85K user/file) và chỉ **1/55 file** chứa 4242 (`[3696, 5534]`). Đây là thước đo xác định,
+#   không phụ thuộc máy.
+# - **Speedup wall-clock** (xem output phía trên; các lần chạy của mình 7–8×) đạt ≥ 3× nhưng dao động theo SSD,
+#   cache OS và tải CPU — vì vậy rubric chấp nhận pruning ratio thay thế.
+# - **Ý nghĩa production:** trên object storage mỗi file là một GET + một lần đọc footer; với 10K query/ngày,
+#   đọc 1 thay vì 55 file là khác biệt lớn về latency và chi phí request.

@@ -403,3 +403,21 @@ for k, v in checks.items():
     print(f"  [{'PASS' if v else 'FAIL'}] {k}")
 assert all(checks.values()), "NB7 incomplete — see FAIL rows above"
 print("\nNB7 complete.")
+
+# %% [markdown]
+# ## 📝 Phân tích kết quả (NB7)
+#
+# - **Inline vs pointer:** tổng bytes gần như bằng nhau (12.5 MB) — byte phải nằm ở đâu đó. Với scan phân tích
+#   `GROUP BY topic`, cả hai layout chỉ đọc **1.2 KB** nhờ projection pushdown: cột blob không làm chậm scan cột.
+# - **Random-access amplification = 200×** (≥ 5×): file inline có 1 row group chứa 200 dòng (12.5 MB). Parquet
+#   đọc/giải nén theo column chunk của cả row group, nên lấy 1 frame (64 KB) buộc phải đọc 12.5 MB; layout
+#   pointer chỉ cần một GET 64 KB. Đây là nguyên nhân GPU bị "đói" dữ liệu khi training đọc ngẫu nhiên.
+# - **Quantization int8:** 1,024 B → 256 B/vector (4× trong RAM); trên đĩa 2.6 MB → 451.9 KB (**5.8×**, ≥ 3×; int8
+#   nén tốt hơn float32). **recall@10 = 0.904** (≥ 0.80) và **topic fidelity = 1.000** (≥ 0.95): các "miss" chỉ là
+#   hoán đổi giữa các hàng xóm gần tương đương, nên recall theo ID đánh giá thấp chất lượng cho RAG.
+# - **Semantic search bằng SQL:** `array_cosine_similarity` trong DuckDB trả top-5 cùng topic `storage`
+#   (sim 0.77–0.78). Delta trả `list<float>` nên phải cast `FLOAT[256]`. Brute-force ~9 ms/2K vector, ngoại suy
+#   tuyến tính ~4.7 s ở 1M → vector DB là *index dẫn xuất*, lakehouse là system-of-record.
+# - **Lifecycle bug:** xóa 8 doc của `user_042` → bảng còn **0 hit**, external index vẫn trả **8 hit** (vi phạm
+#   yêu cầu xóa). CDF từ v1 phát ra đúng 8 sự kiện delete kèm `doc_id` — index phải subscribe delete thay vì
+#   chỉ upsert một chiều.
