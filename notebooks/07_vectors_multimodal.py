@@ -421,3 +421,25 @@ print("\nNB7 complete.")
 # - **Lifecycle bug:** xóa 8 doc của `user_042` → bảng còn **0 hit**, external index vẫn trả **8 hit** (vi phạm
 #   yêu cầu xóa). CDF từ v1 phát ra đúng 8 sự kiện delete kèm `doc_id` — index phải subscribe delete thay vì
 #   chỉ upsert một chiều.
+
+# %% [markdown]
+# ## ❓ Trả lời câu hỏi (mục 3.7)
+#
+# **1. Tiết kiệm dung lượng đánh đổi chất lượng tìm kiếm ra sao?**
+# int8 lưu mỗi chiều bằng 1 byte thay vì 4: 1,024 → 256 B/vector, trên đĩa 2.6 MB → 451.9 KB (**5.8×**, tiết kiệm 83%).
+# Đổi lại, sai số lượng tử hóa làm thay đổi nhẹ điểm cosine, nên thứ hạng của các hàng xóm có điểm gần nhau bị đảo:
+# recall@10 theo doc ID = **0.904** (mất ~1/10 ID so với float32), nhưng topic fidelity = **1.000**. Với RAG trên
+# corpus này, đánh đổi rất có lợi; trên corpus có nhiều tài liệu gần giống nhau nhưng khác nghĩa, cần đo lại hoặc
+# rerank top-k bằng float32.
+#
+# **2. Recall theo doc ID khác topic fidelity thế nào?**
+# Recall@10 hỏi "int8 có trả về *đúng các doc* mà float32 trả về không" — rất khắt khe: đổi doc #10 lấy doc #11 có
+# điểm gần bằng cũng bị tính là miss. Topic fidelity hỏi "các kết quả có *cùng chủ đề* với query không" — gần với điều
+# người dùng RAG quan tâm (ngữ cảnh có liên quan không). Vì vậy recall ID đánh giá thấp chất lượng: 9.6% miss đều là
+# hoán đổi giữa các doc cùng topic.
+#
+# **3. External index cần nhận loại sự kiện nào để hết trả dữ liệu đã xóa?**
+# Sự kiện **delete** (và cả update làm đổi embedding), không chỉ insert/upsert. Đo được: sau khi xóa 8 doc của
+# `user_042`, bảng trả 0 hit nhưng index cũ vẫn trả 8 hit. Change Data Feed của Delta phát ra đúng 8 dòng
+# `_change_type = delete` kèm `doc_id` — index cần subscribe CDF và xóa theo các ID đó. Pipeline sync chỉ upsert một
+# chiều sẽ giữ dữ liệu đã xóa *mãi mãi* — vi phạm yêu cầu xóa dữ liệu cá nhân.

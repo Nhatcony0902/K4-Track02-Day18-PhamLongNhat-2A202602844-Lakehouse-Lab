@@ -316,3 +316,27 @@ print("\nNB5 complete.")
 #   metadata, không rewrite file. Cột mới `tier` có id 6, 5,000 dòng cũ đọc ra NULL.
 # - **Partition evolution:** sau khi đổi spec, data file thuộc **spec 1 và 2** cùng tồn tại; 5,500 dòng đọc được
 #   qua cả hai layout mà không rewrite.
+
+# %% [markdown]
+# ## ❓ Trả lời câu hỏi (mục 3.5)
+#
+# **1. Hidden partitioning hỗ trợ filter trên cột nguồn như thế nào?**
+# Partition spec lưu *quan hệ* `ts_day = day(ts)` (field nguồn id 2, transform `day`) trong metadata, và mỗi data file
+# ghi giá trị partition của nó trong manifest. Khi query lọc `ts >= '2026-08-05' AND ts < '2026-08-06'`, scan planner
+# áp cùng transform lên predicate để suy ra điều kiện trên `ts_day`, rồi loại các manifest entry không khớp —
+# `plan_files()` trả 1/10 file (**10×**). Người dùng không cần biết cột partition tồn tại, nên không thể quên
+# predicate partition như ở Hive.
+#
+# **2. Field ID giúp gì khi rename?**
+# Iceberg nhận diện cột bằng ID số, không bằng tên; file Parquet cũng lưu field ID. Đổi `latency_ms → latency_millis`
+# chỉ đổi tên gắn với ID 4 trong metadata — không rewrite file nào, file cũ vẫn được đọc đúng cột. Nếu nhận diện theo
+# tên, rename sẽ khiến dữ liệu cũ đọc ra NULL; nếu theo vị trí, drop/thêm cột có thể đọc nhầm cột.
+#
+# **3. Vì sao partition evolution không yêu cầu mọi file cũ đổi layout ngay?**
+# Mỗi data file trong manifest gắn với `spec_id` mà nó được ghi. Sau khi thêm partition `model` (spec 2), file cũ vẫn
+# thuộc spec 1, file mới thuộc spec 2; planner đánh giá filter theo từng spec. Vì vậy đổi layout chỉ là commit
+# metadata, cả 5,500 dòng vẫn đọc được qua hai layout, và việc rewrite file cũ (nếu muốn) có thể làm dần bằng
+# compaction thay vì một job migration dừng hệ thống.
+#
+# *Phạm vi:* đây là SQLite catalog cục bộ và client-side planning; REST catalog production còn lo xác thực, cấp
+# credential và có thể plan phía server.

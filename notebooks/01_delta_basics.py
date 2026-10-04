@@ -129,3 +129,26 @@ print("\nNB1 complete.")
 #   mà không cần rewrite file cũ. DuckDB thấy đúng 2 nhóm: `premium` (1) và `NULL` (3).
 # - **Ý nghĩa:** enforcement mặc định chặn dữ liệu bẩn ở ranh giới ghi; muốn đổi schema phải khai báo rõ — đó là
 #   khác biệt giữa lakehouse và một thư mục Parquet "data swamp".
+
+# %% [markdown]
+# ## ❓ Trả lời câu hỏi (mục 3.1)
+#
+# **1. Enforcement khác evolution ở điểm nào?**
+# Enforcement là hành vi *mặc định*: mọi lần ghi phải khớp schema đã có trong log; lần ghi `age="thirty"` (string
+# vào cột Int64) bị từ chối toàn bộ (`Cast error: Cannot cast string 'thirty' to value of Int64 type`) và không tạo
+# commit nào — `history()` vẫn chỉ có các commit hợp lệ. Evolution là thay đổi schema *có chủ đích*: chỉ xảy ra khi
+# người ghi bật `schema_mode="merge"`; khi đó cột `tier` được thêm vào `metaData.schemaString` và dòng cũ đọc ra NULL.
+# Enforcement bảo vệ dữ liệu khỏi sai kiểu; evolution cho phép schema lớn dần nhưng có kiểm soát.
+#
+# **2. Vì sao thêm cột cần opt-in?**
+# Nếu bảng tự nhận mọi cột mới, một producer gõ sai tên cột (`teir`), đổi kiểu, hoặc gửi payload rác sẽ âm thầm
+# làm thay đổi schema mà mọi consumer downstream (dashboard, job Silver/Gold) phải gánh. Bắt opt-in biến thay đổi
+# schema thành một quyết định có chủ ý, được ghi lại trong log, thay vì một tác dụng phụ của một lần ghi.
+#
+# **3. Transaction log cung cấp bằng chứng gì về một lần ghi?**
+# Commit `00000000000000000001.json` (ảnh `nb01_delta_log.png`) ghi: `commitInfo` (thời điểm, `operation: WRITE`,
+# `mode: Append`, engine `delta-rs:py-1.6.6`, `num_added_rows: 1`), `metaData` (schema mới có `tier`), và action
+# `add` với đường dẫn file Parquet, kích thước, `dataChange: true` và stats `numRecords`/min/max từng cột.
+# Tức là log trả lời được *ai/khi nào/thao tác gì/những file nào thuộc version này* — đó là nền cho ACID, time travel
+# và file skipping. Ghi chú: cờ enforcement ở cuối notebook gốc bị hardcode `True`; mình đã thay bằng cờ thật
+# `bad_write_blocked` lấy từ nhánh `except` của cell ghi sai kiểu.

@@ -21,7 +21,7 @@
 
 Notebook nộp nằm ở `submission/notebooks/` — thực thi bằng
 `jupyter nbconvert --to notebook --execute` (kernel Python 3.11 của venv), giữ nguyên output.
-Mỗi notebook có cell **"📝 Phân tích kết quả"** ở cuối giải thích số liệu.
+Cuối mỗi notebook có cell **"📝 Phân tích kết quả"** (giải thích số liệu) và cell **"❓ Trả lời câu hỏi"** (trả lời các câu hỏi "Giải thích" ở mục 3.1–3.8 của hướng dẫn lab).
 Screenshots ở `submission/screenshots/` được render từ chính output đã lưu trong các notebook này.
 
 ## Thay đổi so với đề bài (không hạ ngưỡng nào)

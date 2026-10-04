@@ -198,3 +198,32 @@ print("\nNB4 complete.")
 #   TimeZone của session (`Asia/Bangkok`, UTC+7). Ngày 04-01 chỉ có 19,271 dòng và 04-08 có 7,915 dòng —
 #   hai ngày "một phần". Bài học: phân vùng theo ngày phải cố định timezone (ví dụ `SET TimeZone='UTC'`),
 #   nếu không cùng một code chạy trên hai máy sẽ ra Gold khác nhau.
+
+# %% [markdown]
+# ## ❓ Trả lời câu hỏi (mục 3.4)
+#
+# **1. Dedup ở Silver giải quyết vấn đề nào?**
+# Bronze có 200,000 dòng nhưng chỉ 190,052 `request_id` duy nhất: 9,948 dòng là bản ghi lặp do retry/gửi lại
+# (9,687 request_id xuất hiện ≥ 2 lần). Không dedup thì mọi metric ở Gold bị đếm trùng: số request, tổng token,
+# chi phí bị thổi lên ~5%, và latency/error_rate bị lệch theo các lần retry. Silver dùng `ROW_NUMBER() OVER
+# (PARTITION BY request_id ORDER BY ts)` để giữ đúng một dòng/request (bản sớm nhất), biến Silver thành "một sự thật"
+# cho mọi consumer.
+#
+# **2. Vì sao dashboard đọc Gold?**
+# Gold đã tổng hợp sẵn 190K dòng thành 24 dòng (ngày × model), partition theo `date` và Z-order theo `model`.
+# Dashboard chỉ đọc vài KB thay vì quét + parse JSON của cả bảng, nên nhanh và rẻ; và mọi dashboard dùng chung một
+# định nghĩa p50/p95/cost/error_rate thay vì mỗi người tự viết query trên Bronze và ra số khác nhau.
+#
+# **3. Cách tính error rate và chi phí có phù hợp với dữ liệu đầu vào không?** — Hợp lý cho lab, nhưng có hạn chế
+# mình kiểm tra trực tiếp trên Silver:
+# - `error_rate = AVG(status <> 'ok')` gộp cả `error` (3,757) lẫn `rate_limited` (5,683) → ~5%. Hợp lý nếu "lỗi" là
+#   mọi request không thành công, nhưng nên tách hai loại vì nguyên nhân khác nhau (lỗi model vs. hết quota).
+#   Nếu `status` NULL, `NULL <> 'ok'` rơi vào nhánh ELSE → bị đếm là thành công; dữ liệu này không có NULL, nhưng
+#   production nên dùng `status IS DISTINCT FROM 'ok'`.
+# - `cost_usd` tính cho *mọi* request, kể cả request lỗi: trong dữ liệu sinh, request `error`/`rate_limited` vẫn có
+#   ~1,000 completion token trung bình. Thực tế request bị rate-limit thường không sinh output token nên không bị tính
+#   tiền → cost ở đây bị **ước lượng cao**. Ngoài ra đơn giá là giá minh họa.
+# - Dedup giữ bản ghi *sớm nhất*; với retry thật, bản cuối cùng thường mới là kết quả cuối (ví dụ lần 1 lỗi, lần 2 ok),
+#   nên giữ bản đầu có thể làm error_rate cao hơn thực tế.
+# - Ngày được tính theo TimeZone của session DuckDB (`Asia/Bangkok`) chứ không theo UTC → 8 ngày, trong đó 04-01 và
+#   04-08 chỉ có một phần dữ liệu; nên `SET TimeZone='UTC'` trước khi tạo cột `date`.

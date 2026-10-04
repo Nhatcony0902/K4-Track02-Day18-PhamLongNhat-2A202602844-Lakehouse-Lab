@@ -474,3 +474,35 @@ print("\nNB6 complete.")
 #   "orphan" (báo 5 thay vì 3) và in nhầm tên checkpoint v99 — mình đã sửa phần in và siết check
 #   (checkpoint phải trùng version hiện tại; disk phải bằng log sau khi dọn orphan).
 # - `retention_hours=0` chỉ dùng cho dữ liệu scratch của lab; production giữ ≥ 168h để không phá reader đang chạy.
+
+# %% [markdown]
+# ## ❓ Trả lời câu hỏi (mục 3.6)
+#
+# | Job | Trước | Sau |
+# |---|---|---|
+# | 1 Compaction | 200 file, TB 51.5 KB | 11 file (18×) |
+# | 2 Clustering | mở 11/11 file | mở 1/10 (skip 90%) |
+# | 3 Vacuum / expiry | Delta: 211 file tombstone · Iceberg: 20 snapshots | Delta: thu hồi 16.1 MB, data còn 6.2 MB · Iceberg: 3 snapshots |
+# | 4 Orphans | 3 Delta orphan · 40 avro Iceberg | 0 orphan (disk = log = 10) · 23 avro (17 manifest list) |
+# | 5 Checkpoint | 204 JSON | `…203.checkpoint.parquet` + `_last_checkpoint` |
+#
+# Dữ liệu hiện tại vẫn đọc được: Delta 100,000 dòng, Iceberg 2,000 dòng.
+#
+# **1. Vì sao orphan chưa từng commit có thể không được Delta vacuum dọn?**
+# `deltalake` 1.6.6 vacuum dựa trên log: nó xóa các file đã bị *tombstone* (action `remove`) và quá retention. File do
+# writer crash ghi ra trước khi commit chưa bao giờ có `add`, nên cũng chưa bao giờ có `remove` — log không biết nó
+# tồn tại. Đo được: dry-run sau khi đặt 3 orphan 30 ngày tuổi vẫn chỉ liệt kê 211 tombstone (0 file trong đó còn trên
+# đĩa) và bỏ qua cả 3 orphan. Phải tự lấy *file trên đĩa − file log tham chiếu* (kèm age guard) mới tìm ra.
+#
+# **2. Vì sao giảm snapshot trong đường PyIceberg này chưa đồng nghĩa file vật lý đã bị xóa?**
+# `expire_snapshots` của PyIceberg 0.12 chỉ ghi metadata mới bỏ tham chiếu tới 17 snapshot; nó không xóa file.
+# Đo được: snapshots 20 → 3 nhưng avro vẫn 40 → 40, metadata còn *tăng* 346 → 355 KB (thêm metadata.json mới). Các
+# manifest list của snapshot đã expire thành file không được tham chiếu; phải chạy orphan sweep (17 file, 37.2 KB) mới
+# thu hồi. Đây là hành vi của API/phiên bản này; Spark `expire_snapshots` có thể tự xóa file.
+#
+# **3. Retention ảnh hưởng reader cũ thế nào?**
+# Retention là khoảng thời gian file đã tombstone/snapshot cũ được giữ lại. Trong thời gian đó, time travel và các
+# query dài đang đọc snapshot cũ vẫn chạy được. Lab dùng `retention_hours=0`, nên sau vacuum time travel về v0 không
+# còn, và nếu có reader đang đọc version cũ, file của nó bị xóa giữa chừng → query lỗi "file not found". Orphan cũng
+# vậy: không có age guard sẽ xóa file của writer đang chạy chưa commit. Production giữ ≥ 7 ngày (168 h), dài hơn query
+# lâu nhất và cửa sổ time travel cần cho audit/rollback; đổi lại phải trả tiền lưu trữ cho các file cũ trong thời gian đó.
